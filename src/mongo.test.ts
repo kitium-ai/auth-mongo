@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 
+// eslint-disable-next-line @typescript-eslint/naming-convention
 let MongoStorageAdapter: typeof import('./mongo').MongoStorageAdapter;
 
 vi.mock('@kitiumai/logger', () => ({
@@ -8,11 +9,14 @@ vi.mock('@kitiumai/logger', () => ({
 }));
 
 vi.mock('@kitiumai/error', () => ({
+  // eslint-disable-next-line @typescript-eslint/naming-convention
   InternalError: class InternalError extends Error {
     code?: string;
     constructor(opts: { code?: string; message?: string }) {
       super(opts?.message);
-      this.code = opts?.code;
+      if (opts?.code !== undefined) {
+        this.code = opts.code;
+      }
     }
   },
 }));
@@ -22,7 +26,7 @@ beforeAll(async () => {
   MongoStorageAdapter = module.MongoStorageAdapter;
 });
 
-const randomId = () => randomBytes(8).toString('hex');
+const randomId = (): string => randomBytes(8).toString('hex');
 
 describe('MongoStorageAdapter hardening', () => {
   it('enforces per-operation timeout', async () => {
@@ -32,8 +36,11 @@ describe('MongoStorageAdapter hardening', () => {
     });
 
     await expect(
-      // @ts-expect-error accessing internal helper for test coverage
-      (adapter as any).withRetry(() => new Promise((resolve) => setTimeout(resolve, 20)), 'timeout-test')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (adapter as any).withRetry(
+        () => new Promise((resolve) => setTimeout(resolve, 20)),
+        'timeout-test'
+      )
     ).rejects.toMatchObject({ code: 'auth-mongo/operation_timeout' });
   });
 
@@ -45,6 +52,7 @@ describe('MongoStorageAdapter hardening', () => {
 
     const secret = `api_${randomId()}`;
     const lastFour = secret.slice(-4);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const hashed = (adapter as any).hashApiKeySecret(secret);
 
     const storedRecord = {

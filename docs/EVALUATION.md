@@ -21,17 +21,20 @@ This document benchmarks the MongoDB storage adapter against expectations set by
 ## Recommendations
 
 ### Short-term (1–2 sprints)
+
 - **Add integration and load tests** covering CRUD flows, index expectations, retry paths, and TTL expirations against MongoDB containers; publish coverage to increase confidence for adopters.
 - **Enforce per-operation timeouts** by applying `operationTimeoutMS` to MongoDB commands and surfacing timeout metrics; document recommended values for different workloads. 【F:src/mongo.ts†L69-L188】
 - **Harden API key security** by supporting stronger KDFs (argon2id/scrypt) and rotation helpers (prefix/last-four mapping with staged cutovers); document breach-response playbooks. 【F:src/mongo.ts†L19-L26】
 
 ### Medium-term (quarter)
+
 - **Observability bundle** – Emit structured metrics (p50/p99 latency, retries, pool size, cache hit rates) via OpenTelemetry, and add optional tracing spans around each operation. 【F:src/mongo.ts†L134-L188】
 - **Lifecycle management** – Introduce soft-delete flags, archival collections, and automated data-retention workflows; add auditing hooks for user, org, and key mutations to help with compliance reporting. 【F:src/mongo.ts†L214-L317】
 - **Resilience patterns** – Add configurable transaction usage for multi-collection writes (e.g., role assignments), connection failover guidance for MongoDB Atlas/replica sets, and chaos tests that simulate node loss and timeouts. 【F:src/mongo.ts†L134-L188】
 - **API ergonomics** – Provide pagination and filtering helpers for list operations, plus validation schemas for inputs to prevent inconsistent data shapes entering the database.
 
 ### Long-term
+
 - **Enterprise security features** – Document and optionally enable client-side field-level encryption, centralized secret management for API key salts, and audit logging with tamper-evident storage.
 - **Multi-region & scale** – Offer guidance and config flags for read-preference strategies, latency-based routing, and global session consistency models, matching patterns from large providers.
 - **Ecosystem polish** – Publish a public roadmap, changelog with breaking-change policies, and migration guides across schema versions to mirror expectations from enterprise SDKs.

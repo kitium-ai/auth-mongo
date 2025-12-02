@@ -27,6 +27,7 @@ const hashApiKey = (
   key: string,
   algorithm: ApiKeyHashAlgorithm,
   salt?: Buffer,
+  // eslint-disable-next-line @typescript-eslint/naming-convention
   scryptParams: { N: number; r: number; p: number } = { N: 16384, r: 8, p: 1 }
 ): string => {
   if (algorithm === 'scrypt') {
@@ -105,7 +106,9 @@ export class MongoStorageAdapter implements StorageAdapter {
     this.databaseName = databaseName ?? 'auth';
     this.operationTimeoutMS = operationTimeoutMS ?? null;
     this.apiKeyHashAlgorithm = apiKeyHashAlgorithm ?? 'sha256';
-    this.apiKeySalt = apiKeySalt;
+    if (apiKeySalt !== undefined) {
+      this.apiKeySalt = apiKeySalt;
+    }
   }
 
   async connect(): Promise<void> {
@@ -158,10 +161,7 @@ export class MongoStorageAdapter implements StorageAdapter {
     return this.getDatabase().collection<T>(name);
   }
 
-  private async withRetry<T>(
-    operation: () => Promise<T>,
-    operationName: string
-  ): Promise<T> {
+  private async withRetry<T>(operation: () => Promise<T>, operationName: string): Promise<T> {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= this.defaultRetries; attempt += 1) {
@@ -180,7 +180,7 @@ export class MongoStorageAdapter implements StorageAdapter {
                       retryable: false,
                     })
                   );
-                }, this.operationTimeoutMS);
+                }, this.operationTimeoutMS as number);
               })
             : null;
 
@@ -437,7 +437,10 @@ export class MongoStorageAdapter implements StorageAdapter {
 
     for (const candidate of candidates) {
       const candidateHash = Buffer.from(candidate.hash, 'hex');
-      if (candidateHash.length === hashedBuffer.length && timingSafeEqual(candidateHash, hashedBuffer)) {
+      if (
+        candidateHash.length === hashedBuffer.length &&
+        timingSafeEqual(candidateHash, hashedBuffer)
+      ) {
         return candidate;
       }
     }
@@ -512,9 +515,7 @@ export class MongoStorageAdapter implements StorageAdapter {
 
   async getApiKeysByPrefixAndLastFour(prefix: string, lastFour: string): Promise<ApiKeyRecord[]> {
     return this.withRetry(async () => {
-      const docs = await this.getCollection('api_keys')
-        .find({ prefix, lastFour })
-        .toArray();
+      const docs = await this.getCollection('api_keys').find({ prefix, lastFour }).toArray();
       return docs.map((doc) => this.mapApiKeyRecord(doc));
     }, 'getApiKeysByPrefixAndLastFour');
   }
@@ -536,11 +537,9 @@ export class MongoStorageAdapter implements StorageAdapter {
         setFields[key] = value;
       }
 
-      const result = await this.getCollection('api_keys').findOneAndUpdate(
-        { _id: id },
-        updateDoc,
-        { returnDocument: 'after' }
-      );
+      const result = await this.getCollection('api_keys').findOneAndUpdate({ _id: id }, updateDoc, {
+        returnDocument: 'after',
+      });
 
       if (!result) {
         throw new InternalError({
@@ -618,11 +617,9 @@ export class MongoStorageAdapter implements StorageAdapter {
         setFields[key] = value;
       }
 
-      const result = await this.getCollection('sessions').findOneAndUpdate(
-        { _id: id },
-        updateDoc,
-        { returnDocument: 'after' }
-      );
+      const result = await this.getCollection('sessions').findOneAndUpdate({ _id: id }, updateDoc, {
+        returnDocument: 'after',
+      });
 
       if (!result) {
         throw new InternalError({
@@ -781,11 +778,9 @@ export class MongoStorageAdapter implements StorageAdapter {
         setFields[key] = value;
       }
 
-      const result = await this.getCollection('users').findOneAndUpdate(
-        { _id: id },
-        updateDoc,
-        { returnDocument: 'after' }
-      );
+      const result = await this.getCollection('users').findOneAndUpdate({ _id: id }, updateDoc, {
+        returnDocument: 'after',
+      });
 
       if (!result) {
         throw new InternalError({
@@ -938,13 +933,19 @@ export class MongoStorageAdapter implements StorageAdapter {
 
   async incrementEmailVerificationTokenAttempts(tokenId: string): Promise<number> {
     return this.withRetry(async () => {
-      const result = await this.getCollection('email_verification_token_attempts').findOneAndUpdate(
+      const collection = this.getCollection('email_verification_token_attempts');
+      const incrementValue: number = 1;
+      await collection.updateOne(
         { _id: tokenId },
-        { $inc: { attempts: 1 } },
-        { upsert: true, returnDocument: 'after' }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { $inc: { attempts: incrementValue } } as any,
+        {
+          upsert: true as boolean,
+        }
       );
 
-      return (result?.['attempts'] as number) || 1;
+      const doc = await collection.findOne({ _id: tokenId });
+      return (doc?.['attempts'] as number) || 1;
     }, 'incrementEmailVerificationTokenAttempts');
   }
 
@@ -1081,9 +1082,7 @@ export class MongoStorageAdapter implements StorageAdapter {
 
   async getUserRoles(userId: string, orgId: string): Promise<RoleRecord[]> {
     return this.withRetry(async () => {
-      const userRoles = await this.getCollection('user_roles')
-        .find({ userId, orgId })
-        .toArray();
+      const userRoles = await this.getCollection('user_roles').find({ userId, orgId }).toArray();
 
       const roleIds = userRoles.map((ur) => ur['roleId'] as string);
       const roles = await this.getCollection('roles')
@@ -1109,7 +1108,8 @@ export class MongoStorageAdapter implements StorageAdapter {
         metadataUrl: data['metadataUrl'] || data['metadata_url'] || null,
         clientId: data['clientId'] || data['client_id'] || null,
         clientSecret: data['clientSecret'] || data['client_secret'] || null,
-        tokenEndpointAuthMethod: data['tokenEndpointAuthMethod'] || data['token_endpoint_auth_method'] || null,
+        tokenEndpointAuthMethod:
+          data['tokenEndpointAuthMethod'] || data['token_endpoint_auth_method'] || null,
         idpEntityId: data['idpEntityId'] || data['idp_entity_id'] || null,
         idpSsoUrl: data['idpSsoUrl'] || data['idp_sso_url'] || null,
         idpSloUrl: data['idpSloUrl'] || data['idp_slo_url'] || null,
@@ -1547,7 +1547,7 @@ export class MongoStorageAdapter implements StorageAdapter {
       name: doc['name'] as string,
       description: doc['description'] as string,
       isSystem: doc['isSystem'] as boolean,
-      permissions: ((doc['permissions'] || []) as unknown[]).map(p => p as Permission),
+      permissions: ((doc['permissions'] || []) as unknown[]).map((p) => p as Permission),
       metadata: (doc['metadata'] as Record<string, unknown>) || {},
       createdAt: doc['createdAt'] as Date,
       updatedAt: doc['updatedAt'] as Date,
