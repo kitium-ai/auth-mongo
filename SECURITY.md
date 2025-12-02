@@ -1,40 +1,103 @@
 # Security Policy
 
-## Supported Versions
+## Reporting a Vulnerability
 
-We release patches for security vulnerabilities in the following versions:
+Please do **NOT** open a public issue for security vulnerabilities.
+
+Instead, please email: **security@kitiumai.com**
+
+Include the following information:
+- Description of the vulnerability
+- Steps to reproduce
+- Potential impact
+- Suggested fix (if any)
+
+We will acknowledge receipt within 24 hours and provide regular updates on our progress.
+
+## Supported Versions
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 3.x.x   | :white_check_mark: |
-| < 3.0   | :x:                |
-
-## Reporting a Vulnerability
-
-If you discover a security vulnerability within @kitiumai/auth-mongo, please send an email to security@kitiumai.com. All security vulnerabilities will be promptly addressed.
-
-Please include the following information:
-
-- Type of vulnerability
-- Full paths of source file(s) related to the vulnerability
-- Location of the affected source code (tag/branch/commit or direct URL)
-- Any special configuration required to reproduce the issue
-- Step-by-step instructions to reproduce the issue
-- Proof-of-concept or exploit code (if possible)
-- Impact of the issue, including how an attacker might exploit it
+| 1.x     | :white_check_mark: |
+| 0.x     | :x:                |
 
 ## Security Best Practices
 
-When using @kitiumai/auth-mongo in production:
+### For Contributors
 
-1. **Connection Security**: Always use TLS/SSL for MongoDB connections
-2. **Network Access**: Restrict MongoDB network access to trusted sources only
-3. **Authentication**: Enable MongoDB authentication and use strong credentials
-4. **Encryption**: Consider MongoDB field-level encryption for sensitive data
-5. **Monitoring**: Enable audit logging and monitor for suspicious activity
-6. **Updates**: Keep the package and MongoDB server updated to the latest versions
-7. **Backups**: Implement regular backup strategies for your authentication data
+1. **Never commit secrets** - Use environment variables
+2. **Keep dependencies updated** - Review Dependabot PRs promptly
+3. **Use strong authentication** - Enable 2FA on GitHub
+4. **Sign commits** - Configure GPG commit signing
+5. **Review code carefully** - Look for security vulnerabilities in PRs
 
-## Responsible Disclosure
+### For Maintainers
 
-We ask that you do not publicly disclose the vulnerability until we have had a chance to address it. We will acknowledge your email within 48 hours and will send a more detailed response within 7 days.
+1. **Review security reports promptly** - Within 48 hours
+2. **Keep the repository updated** - Address critical vulnerabilities immediately
+3. **Audit dependencies regularly** - Run `npm audit` before releases
+4. **Monitor for exposed secrets** - Review secret scanning alerts
+5. **Test security fixes** - Ensure patches don't break functionality
+
+## Security Features Enabled
+
+- ✅ Branch protection rules
+- ✅ Required code reviews (2 approvals)
+- ✅ CodeQL analysis
+- ✅ Dependabot alerts and updates
+- ✅ Secret scanning with push protection
+- ✅ Signed commits required
+- ✅ CODEOWNERS enforcement
+
+## Security Checklist for Reviewers
+
+Before approving any PR, verify:
+
+- [ ] **No hardcoded secrets**
+  - No API keys, passwords, tokens
+  - No credentials in code or comments
+
+- [ ] **Dependency changes**
+  - Check for known vulnerabilities
+  - Review new dependencies for legitimacy
+  - No unnecessary dependencies added
+
+- [ ] **Access control**
+  - Proper authentication/authorization checks
+  - No overly permissive permissions
+
+- [ ] **Data handling**
+  - Input validation present
+  - SQL injection prevention
+  - XSS prevention (for web components)
+  - Proper data sanitization
+
+- [ ] **Error handling**
+  - No sensitive information in error messages
+  - Proper logging without secrets
+
+- [ ] **Cryptography**
+  - Strong algorithms used
+  - Proper key management
+  - No custom crypto implementations
+
+- [ ] **Third-party integrations**
+  - API calls use HTTPS
+  - Proper rate limiting
+  - Error handling for API failures
+
+## References
+
+- [GitHub Security Best Practices](https://docs.github.com/en/code-security)
+- [OWASP Top 10](https://owasp.org/Top10/)
+- [Dependabot Documentation](https://docs.github.com/en/code-security/dependabot)
+- [CodeQL Documentation](https://codeql.github.com/)
+- [Branch Protection Rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/defining-the-mergeability-of-pull-requests)
+
+---
+
+For questions or issues with GitHub security:
+
+1. **General questions** → Open an issue tagged `security`
+2. **Security vulnerabilities** → Email security@kitiumai.com
+3. **Configuration help** → Contact tech leads
