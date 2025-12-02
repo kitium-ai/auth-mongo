@@ -45,6 +45,25 @@ const storage = new MongoStorageAdapter(process.env.MONGODB_URI!, {
 });
 ```
 
+### API key security helpers
+
+```ts
+const storage = new MongoStorageAdapter(process.env.MONGODB_URI!, {
+  apiKeyHashAlgorithm: 'scrypt', // hardened hashing for API key secrets
+  apiKeySalt: Buffer.from(process.env.API_KEY_SALT!, 'hex'),
+});
+
+// Create and persist a key with prefix/last-four metadata for audits
+const { record, key } = await storage.createApiKeyWithSecret('user_123', ['read', 'write'], 'kit');
+
+// Validate a presented key using constant-time comparison
+const matched = await storage.verifyApiKeySecret(key);
+
+// Rotate a key and expire the previous one immediately
+const rotation = await storage.rotateApiKey(record.id, { expiresOldKeysAt: new Date() });
+console.log(rotation.key);
+```
+
 ### Health checks
 
 ```ts
@@ -65,7 +84,7 @@ if (health.status !== 'ok') {
 All methods come from the `StorageAdapter` interface in `@kitiumai/auth`.
 
 - Connection: `connect()`, `disconnect()`
-- API keys: `createApiKey`, `getApiKey`, `getApiKeyByHash`, `getApiKeysByPrefixAndLastFour`, `updateApiKey`, `deleteApiKey`, `listApiKeys`
+- API keys: `createApiKey`, `createApiKeyWithSecret`, `verifyApiKeySecret`, `rotateApiKey`, `getApiKey`, `getApiKeyByHash`, `getApiKeysByPrefixAndLastFour`, `updateApiKey`, `deleteApiKey`, `listApiKeys`
 - Sessions: `createSession`, `getSession`, `updateSession`, `deleteSession`
 - Users: `createUser`, `getUser`, `getUserByEmail`, `getUserByOAuth`, `updateUser`, `deleteUser`, `linkOAuthAccount`
 - Organizations: `createOrganization`, `getOrganization`, `updateOrganization`, `deleteOrganization`
