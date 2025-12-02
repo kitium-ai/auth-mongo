@@ -1,6 +1,6 @@
 {
   "name": "@kitiumai/auth-mongo",
-  "version": "3.1.1",
+  "version": "1.0.0",
   "description": "Enterprise-grade MongoDB storage adapter for @kitiumai/auth with full support for users, sessions, OAuth links, API keys, 2FA, RBAC, and SSO",
   "type": "module",
   "sideEffects": false,

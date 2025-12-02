@@ -1,8 +1,8 @@
 # @kitiumai/auth-mongo
 
-## 3.1.1
+## 1.0.0
 
-### Patch Changes
+### Added
 
 - Initial release of enterprise-grade MongoDB storage adapter
 - Full support for users, sessions, API keys, organizations, RBAC, SSO, and 2FA
