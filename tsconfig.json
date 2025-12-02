@@ -1,0 +1,10 @@
+{
+  "extends": "@kitiumai/config/tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "outDir": "./dist"
+  },
+  "include": [
+    "src"
+  ]
+}
