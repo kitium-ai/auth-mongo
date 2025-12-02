@@ -9,7 +9,7 @@ import {
 } from 'mongodb';
 import { getLogger } from '@kitiumai/logger';
 import { InternalError } from '@kitiumai/error';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
 
 // Utility functions
 const generateId = (): string => {
@@ -21,7 +21,19 @@ const generateApiKey = (prefix: string): string => {
   return `${prefix}_${secret}`;
 };
 
-const hashApiKey = (key: string): string => {
+type ApiKeyHashAlgorithm = 'sha256' | 'scrypt';
+
+const hashApiKey = (
+  key: string,
+  algorithm: ApiKeyHashAlgorithm,
+  salt?: Buffer,
+  scryptParams: { N: number; r: number; p: number } = { N: 16384, r: 8, p: 1 }
+): string => {
+  if (algorithm === 'scrypt') {
+    const result = scryptSync(key, salt ?? Buffer.alloc(0), 32, scryptParams);
+    return result.toString('hex');
+  }
+
   return createHash('sha256').update(key).digest('hex');
 };
 import { setTimeout as delay } from 'node:timers/promises';
@@ -57,6 +69,8 @@ type MongoAdapterOptions = MongoClientOptions & {
   operationTimeoutMS?: number;
   maxRetries?: number;
   databaseName?: string;
+  apiKeyHashAlgorithm?: ApiKeyHashAlgorithm;
+  apiKeySalt?: Buffer;
 };
 
 export class MongoStorageAdapter implements StorageAdapter {
@@ -65,9 +79,19 @@ export class MongoStorageAdapter implements StorageAdapter {
   private readonly logger = getLogger();
   private readonly defaultRetries: number;
   private readonly databaseName: string;
+  private readonly operationTimeoutMS: number | null;
+  private readonly apiKeyHashAlgorithm: ApiKeyHashAlgorithm;
+  private readonly apiKeySalt?: Buffer;
 
   constructor(connectionString: string, options?: MongoAdapterOptions) {
-    const { operationTimeoutMS, maxRetries, databaseName, ...clientOptions } = options ?? {};
+    const {
+      operationTimeoutMS,
+      maxRetries,
+      databaseName,
+      apiKeyHashAlgorithm,
+      apiKeySalt,
+      ...clientOptions
+    } = options ?? {};
 
     this.client = new MongoClient(connectionString, {
       maxPoolSize: 10,
@@ -79,6 +103,9 @@ export class MongoStorageAdapter implements StorageAdapter {
 
     this.defaultRetries = maxRetries ?? 2;
     this.databaseName = databaseName ?? 'auth';
+    this.operationTimeoutMS = operationTimeoutMS ?? null;
+    this.apiKeyHashAlgorithm = apiKeyHashAlgorithm ?? 'sha256';
+    this.apiKeySalt = apiKeySalt;
   }
 
   async connect(): Promise<void> {
@@ -140,7 +167,31 @@ export class MongoStorageAdapter implements StorageAdapter {
     for (let attempt = 0; attempt <= this.defaultRetries; attempt += 1) {
       try {
         const start = Date.now();
-        const result = await operation();
+        let timeoutHandle: NodeJS.Timeout | undefined;
+        const timeoutPromise =
+          this.operationTimeoutMS !== null
+            ? new Promise<never>((_, reject) => {
+                timeoutHandle = setTimeout(() => {
+                  reject(
+                    new InternalError({
+                      code: 'auth-mongo/operation_timeout',
+                      message: `MongoDB operation exceeded ${this.operationTimeoutMS}ms: ${operationName}`,
+                      severity: 'error',
+                      retryable: false,
+                    })
+                  );
+                }, this.operationTimeoutMS);
+              })
+            : null;
+
+        const result = timeoutPromise
+          ? await Promise.race([operation(), timeoutPromise])
+          : await operation();
+
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+
         const durationMs = Date.now() - start;
 
         this.logger.debug('mongo.operation', {
@@ -161,6 +212,9 @@ export class MongoStorageAdapter implements StorageAdapter {
         });
 
         if (!retryable) {
+          if (error instanceof InternalError && error.code === 'auth-mongo/operation_timeout') {
+            throw error;
+          }
           throw new InternalError({
             code: 'auth-mongo/operation_failed',
             message: `Failed to execute MongoDB operation: ${operationName}`,
@@ -345,7 +399,7 @@ export class MongoStorageAdapter implements StorageAdapter {
     prefix: string = 'api'
   ): Promise<{ record: ApiKeyRecord; key: string }> {
     const key = generateApiKey(prefix);
-    const hash = hashApiKey(key);
+    const hash = hashApiKey(key, this.apiKeyHashAlgorithm, this.apiKeySalt);
     const parts = key.split('_');
     const lastFour = parts[parts.length - 1]!.slice(-4);
 
@@ -360,6 +414,62 @@ export class MongoStorageAdapter implements StorageAdapter {
     return { record, key };
   }
 
+  private hashApiKeySecret(secret: string): string {
+    return hashApiKey(secret, this.apiKeyHashAlgorithm, this.apiKeySalt);
+  }
+
+  async verifyApiKeySecret(rawKey: string): Promise<ApiKeyRecord | null> {
+    const parts = rawKey.split('_');
+    if (parts.length < 2) {
+      return null;
+    }
+
+    const prefix = parts[0]!;
+    const lastFour = parts[parts.length - 1]!.slice(-4);
+    const candidates = await this.getApiKeysByPrefixAndLastFour(prefix, lastFour);
+
+    if (!candidates.length) {
+      return null;
+    }
+
+    const hashed = this.hashApiKeySecret(rawKey);
+    const hashedBuffer = Buffer.from(hashed, 'hex');
+
+    for (const candidate of candidates) {
+      const candidateHash = Buffer.from(candidate.hash, 'hex');
+      if (candidateHash.length === hashedBuffer.length && timingSafeEqual(candidateHash, hashedBuffer)) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  async rotateApiKey(
+    id: string,
+    options?: { scopes?: string[]; expiresOldKeysAt?: Date }
+  ): Promise<{ record: ApiKeyRecord; key: string }> {
+    const existing = await this.getApiKey(id);
+
+    if (!existing) {
+      throw new InternalError({
+        code: 'auth-mongo/api_key_not_found',
+        message: 'API key not found for rotation',
+        severity: 'error',
+        retryable: false,
+      });
+    }
+
+    const rotationExpiry = options?.expiresOldKeysAt ?? new Date();
+    await this.updateApiKey(id, { expiresAt: rotationExpiry });
+
+    return this.createApiKeyWithSecret(
+      existing.principalId,
+      options?.scopes ?? existing.scopes,
+      existing.prefix
+    );
+  }
+
   // API Key methods
   async createApiKey(
     data: Omit<ApiKeyRecord, 'id' | 'createdAt' | 'updatedAt'>
@@ -370,13 +480,13 @@ export class MongoStorageAdapter implements StorageAdapter {
 
       const doc = {
         _id: id,
-        principalId: data['\'],
-        hash: data['\'],
-        prefix: data['\'],
-        lastFour: data['\'],
-        scopes: data['\'],
-        metadata: data['\'] || {},
-        expiresAt: data['\'] || null,
+        principalId: data.principalId,
+        hash: data.hash,
+        prefix: data.prefix,
+        lastFour: data.lastFour,
+        scopes: data.scopes,
+        metadata: data.metadata ?? {},
+        expiresAt: data.expiresAt ?? null,
         createdAt: now,
         updatedAt: now,
       };
@@ -469,12 +579,12 @@ export class MongoStorageAdapter implements StorageAdapter {
 
       const doc = {
         _id: id,
-        userId: data['\'],
-        orgId: data['\'] || null,
-        plan: data['\'] || null,
-        entitlements: data['\'] || [],
-        expiresAt: data['\'],
-        metadata: data['\'] || {},
+        userId: data.userId,
+        orgId: data.orgId || null,
+        plan: data.plan || null,
+        entitlements: data.entitlements || [],
+        expiresAt: data.expiresAt,
+        metadata: data.metadata || {},
         createdAt: now,
         updatedAt: now,
       };
@@ -543,11 +653,11 @@ export class MongoStorageAdapter implements StorageAdapter {
 
       const doc = {
         _id: id,
-        name: data['name'],
-        plan: data['\'],
-        seats: data['\'],
-        members: data['\'],
-        metadata: data['\'] || {},
+        name: data.name,
+        plan: data.plan,
+        seats: data.seats,
+        members: data.members,
+        metadata: data.metadata || {},
         createdAt: now,
         updatedAt: now,
       };
@@ -617,13 +727,13 @@ export class MongoStorageAdapter implements StorageAdapter {
 
       const doc = {
         _id: id,
-        email: data['\'] || null,
-        name: data['\'] || null,
-        picture: data['\'] || null,
-        plan: data['\'] || 'free',
-        entitlements: data['\'] || [],
+        email: data.email || null,
+        name: data.name || null,
+        picture: data.picture || null,
+        plan: data.plan || 'free',
+        entitlements: data.entitlements || [],
         oauth: {},
-        metadata: data['\'] || {},
+        metadata: data.metadata || {},
         createdAt: now,
         updatedAt: now,
       };
@@ -745,13 +855,13 @@ export class MongoStorageAdapter implements StorageAdapter {
 
       const doc = {
         _id: id,
-        email: data['\'],
-        code: data['\'],
-        codeHash: data['\'],
-        type: data['type'],
-        userId: data['\'] || null,
-        metadata: data['\'] || {},
-        expiresAt: data['\'],
+        email: data.email,
+        code: data.code,
+        codeHash: data.codeHash,
+        type: data.type,
+        userId: data.userId || null,
+        metadata: data.metadata || {},
+        expiresAt: data.expiresAt,
         usedAt: null,
         createdAt: new Date(),
       };
@@ -861,12 +971,12 @@ export class MongoStorageAdapter implements StorageAdapter {
 
       const doc = {
         _id: id,
-        orgId: data['\'],
-        name: data['name'],
-        description: data['\'] || null,
-        isSystem: data['\'] || false,
-        permissions: data['\'] || [],
-        metadata: data['\'] || {},
+        orgId: data.orgId,
+        name: data.name,
+        description: data.description || null,
+        isSystem: data.isSystem || false,
+        permissions: data.permissions || [],
+        metadata: data.metadata || {},
         createdAt: now,
         updatedAt: now,
       };
@@ -1096,15 +1206,15 @@ export class MongoStorageAdapter implements StorageAdapter {
 
       const doc = {
         _id: id,
-        userId: data['\'],
-        providerId: data['\'],
-        providerType: data['\'],
-        providerSubject: data['\'],
-        providerEmail: data['\'] || null,
-        autoProvisioned: data['\'] || false,
-        metadata: data['\'] || {},
+        userId: data.userId,
+        providerId: data.providerId,
+        providerType: data.providerType,
+        providerSubject: data.providerSubject,
+        providerEmail: data.providerEmail || null,
+        autoProvisioned: data.autoProvisioned || false,
+        metadata: data.metadata || {},
         linkedAt: new Date(),
-        lastAuthAt: data['\'] || new Date(),
+        lastAuthAt: data.lastAuthAt || new Date(),
       };
 
       await this.getCollection('sso_links').insertOne(doc);
@@ -1141,14 +1251,14 @@ export class MongoStorageAdapter implements StorageAdapter {
 
       const doc = {
         _id: id,
-        userId: data['\'],
-        providerId: data['\'],
-        providerType: data['\'],
-        providerSubject: data['\'],
-        sessionToken: data['\'] || null,
-        expiresAt: data['\'],
+        userId: data.userId,
+        providerId: data.providerId,
+        providerType: data.providerType,
+        providerSubject: data.providerSubject,
+        sessionToken: data.sessionToken || null,
+        expiresAt: data.expiresAt,
         linkedAt: new Date(),
-        lastAuthAt: data['\'] || new Date(),
+        lastAuthAt: data.lastAuthAt || new Date(),
       };
 
       await this.getCollection('sso_sessions').insertOne(doc);
@@ -1173,14 +1283,14 @@ export class MongoStorageAdapter implements StorageAdapter {
 
       const doc = {
         _id: id,
-        userId: data['\'],
-        method: data['\'],
-        name: data['\'] || null,
-        verified: data['\'] || false,
-        phoneNumber: data['\'] || null,
-        secret: data['\'] || null,
+        userId: data.userId,
+        method: data.method,
+        name: data.name || null,
+        verified: data.verified || false,
+        phoneNumber: data.phoneNumber || null,
+        secret: data.secret || null,
         lastUsedAt: null,
-        metadata: data['\'] || {},
+        metadata: data.metadata || {},
         createdAt: now,
         updatedAt: now,
       };
@@ -1258,7 +1368,7 @@ export class MongoStorageAdapter implements StorageAdapter {
 
       for (const codeData of codes) {
         const id = generateId();
-        const codeValue = typeof codeData === 'string' ? codeData : codedata['\'] || '';
+        const codeValue = typeof codeData === 'string' ? codeData : codeData['code'] || '';
 
         const doc = {
           _id: id,
@@ -1302,14 +1412,14 @@ export class MongoStorageAdapter implements StorageAdapter {
 
       const doc = {
         _id: id,
-        userId: data['\'],
-        sessionId: data['\'],
-        deviceId: data['\'],
-        method: data['\'],
-        verificationCode: data['\'] || null,
-        attemptCount: data['\'] || 0,
-        maxAttempts: data['\'] || 5,
-        expiresAt: data['\'],
+        userId: data.userId,
+        sessionId: data.sessionId,
+        deviceId: data.deviceId,
+        method: data.method,
+        verificationCode: data.verificationCode || null,
+        attemptCount: data.attemptCount || 0,
+        maxAttempts: data.maxAttempts || 5,
+        expiresAt: data.expiresAt,
         completedAt: null,
         createdAt: new Date(),
       };
